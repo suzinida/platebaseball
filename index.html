@@ -1130,14 +1130,14 @@ const IMG_RED = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAAEsCAYAAACG+
 // ============================================================
 // STATE
 // ============================================================
-const POSITIONS = ['SP', 'CP', 'C', '1B', '2B', '3B', 'SS1', 'SS2', 'LF', 'CF1', 'CF2', 'CF3', 'RF'];
-const BATTER_COUNT = 12;
-const PITCHER_SLOTS = ['SP', 'CP'];
+const POSITIONS = ['SP', 'CP', 'C', '1B', '2B', '3B', 'SS1', 'SS2', 'CF1', 'CF2', 'LF', 'RF', 'DH'];
+const BATTER_COUNT = 14;
+// 중복 허용 포지션 (한 명이 선택해도 다른 사람도 선택 가능)
+const DUPLICATE_OK_POS = ['DH'];
 const GENDERS = ['female', 'male']; // female first since odd innings = female
 
 const emptyRoster = () => ({
   batters: Array.from({length: BATTER_COUNT}, () => ({ pos: '', name: '' })),
-  pitchers: { SP: '', CP: '' },
   currentBatter: 0,
   bases: [false, false, false]
 });
@@ -1181,10 +1181,32 @@ if (persistedV4) {
       if (!state[t].male) state[t].male = emptyRoster();
       ['female', 'male'].forEach(g => {
         const r = state[t][g];
-        if (!r.batters || r.batters.length !== BATTER_COUNT) {
-          r.batters = Array.from({length: BATTER_COUNT}, () => ({ pos: '', name: '' }));
+        // batters 길이 보정 (12 -> 14 등)
+        if (!r.batters) r.batters = [];
+        while (r.batters.length < BATTER_COUNT) {
+          r.batters.push({ pos: '', name: '' });
         }
-        if (!r.pitchers) r.pitchers = { SP: '', CP: '' };
+        if (r.batters.length > BATTER_COUNT) {
+          r.batters = r.batters.slice(0, BATTER_COUNT);
+        }
+        // 기존 pitchers를 batters의 빈 자리로 이동 (마이그레이션)
+        if (r.pitchers) {
+          ['SP', 'CP'].forEach(slot => {
+            const pitcherName = r.pitchers[slot];
+            if (pitcherName) {
+              // 이미 batters에 같은 이름이 있는지 확인
+              const exists = r.batters.some(b => b.name === pitcherName);
+              if (!exists) {
+                // 빈 자리 찾아서 넣기
+                const emptyIdx = r.batters.findIndex(b => !b.name);
+                if (emptyIdx >= 0) {
+                  r.batters[emptyIdx] = { pos: slot, name: pitcherName };
+                }
+              }
+            }
+          });
+          delete r.pitchers;
+        }
         if (!r.bases) r.bases = [false, false, false];
         if (typeof r.currentBatter !== 'number') r.currentBatter = 0;
       });
@@ -1207,8 +1229,24 @@ if (persistedV4) {
         state[t].name = old[t].name || (t === 'home' ? '홈팀' : '어웨이팀');
         state[t].score = old[t].score || 0;
         // Old single roster -> female by default
-        if (old[t].batters) state[t].female.batters = old[t].batters;
-        if (old[t].pitchers) state[t].female.pitchers = old[t].pitchers;
+        if (old[t].batters) {
+          state[t].female.batters = old[t].batters.slice(0, BATTER_COUNT);
+          while (state[t].female.batters.length < BATTER_COUNT) {
+            state[t].female.batters.push({ pos: '', name: '' });
+          }
+        }
+        // 기존 투수들을 타순에 합치기
+        if (old[t].pitchers) {
+          ['SP', 'CP'].forEach(slot => {
+            const pName = old[t].pitchers[slot];
+            if (pName) {
+              const emptyIdx = state[t].female.batters.findIndex(b => !b.name);
+              if (emptyIdx >= 0) {
+                state[t].female.batters[emptyIdx] = { pos: slot, name: pName };
+              }
+            }
+          });
+        }
         if (old[t].bases) state[t].female.bases = old[t].bases;
         if (typeof old[t].currentBatter === 'number') state[t].female.currentBatter = old[t].currentBatter;
       }
@@ -1293,10 +1331,27 @@ const cloudSync = {
           if (!state[t].male) state[t].male = emptyRoster();
           ['female', 'male'].forEach(g => {
             const r = state[t][g];
-            if (!r.batters || r.batters.length !== BATTER_COUNT) {
-              r.batters = Array.from({length: BATTER_COUNT}, () => ({ pos: '', name: '' }));
+            if (!r.batters) r.batters = [];
+            while (r.batters.length < BATTER_COUNT) {
+              r.batters.push({ pos: '', name: '' });
             }
-            if (!r.pitchers) r.pitchers = { SP: '', CP: '' };
+            if (r.batters.length > BATTER_COUNT) {
+              r.batters = r.batters.slice(0, BATTER_COUNT);
+            }
+            // legacy pitchers를 batters로 이동
+            if (r.pitchers) {
+              ['SP', 'CP'].forEach(slot => {
+                const pName = r.pitchers[slot];
+                if (pName) {
+                  const exists = r.batters.some(b => b.name === pName);
+                  if (!exists) {
+                    const emptyIdx = r.batters.findIndex(b => !b.name);
+                    if (emptyIdx >= 0) r.batters[emptyIdx] = { pos: slot, name: pName };
+                  }
+                }
+              });
+              delete r.pitchers;
+            }
             if (!r.bases) r.bases = [false, false, false];
             if (typeof r.currentBatter !== 'number') r.currentBatter = 0;
           });
@@ -1477,7 +1532,7 @@ function renderLineup(team) {
   const roster = getRoster(team);
   const isBatting = (team === 'home' && state.half === 'bottom') || (team === 'away' && state.half === 'top');
 
-  // 12 batter rows
+  // 14 batter rows (포지션에 SP/CP 포함)
   roster.batters.forEach((p, i) => {
     const row = document.createElement('div');
     const isCurrent = isBatting && i === roster.currentBatter && p.name;
@@ -1496,22 +1551,6 @@ function renderLineup(team) {
         render();
       }
     };
-    el.appendChild(row);
-  });
-
-  // 2 pitcher rows
-  ['SP', 'CP'].forEach((slot) => {
-    const name = roster.pitchers[slot] || '';
-    const row = document.createElement('div');
-    row.className = 'row divider-row' + (!name ? ' empty' : '');
-    row.innerHTML = `
-      <div class="num">${slot}</div>
-      <div class="pos-cell">
-        <div class="pos-sticker ${!name ? 'empty' : ''}" style="background: ${name ? '#ffd58c' : ''};">${slot}</div>
-      </div>
-      <div class="name">${name || '(투수 미정)'}</div>
-      <div class="bat-marker"></div>
-    `;
     el.appendChild(row);
   });
 }
@@ -1575,12 +1614,36 @@ function setGender(g) {
 }
 
 function changeInning(delta) {
-  state.inning = Math.max(1, state.inning + delta);
+  // + 버튼: 초→말→다음회 초→말 ... (최대 9회 말까지)
+  // - 버튼: 말→초→이전회 말→초 ... (최소 1회 초까지)
+  if (delta > 0) {
+    if (state.half === 'top') {
+      state.half = 'bottom';
+    } else {
+      if (state.inning >= 9) {
+        toast('9회 말까지만 진행 가능합니다');
+        return;
+      }
+      state.inning++;
+      state.half = 'top';
+    }
+  } else if (delta < 0) {
+    if (state.half === 'bottom') {
+      state.half = 'top';
+    } else {
+      if (state.inning <= 1) {
+        toast('1회 초가 처음입니다');
+        return;
+      }
+      state.inning--;
+      state.half = 'bottom';
+    }
+  }
   // Auto-toggle gender based on inning (odd = female, even = male)
   state.gender = state.inning % 2 === 1 ? 'female' : 'male';
   state.strike = 0;
   state.out = 0;
-  toast(`${state.inning}회 - ${state.gender === 'female' ? '여자' : '남자'}팀`);
+  toast(`${state.inning}회 ${state.half === 'top' ? '초' : '말'} - ${state.gender === 'female' ? '여자' : '남자'}팀`);
   render();
 }
 
@@ -1658,11 +1721,22 @@ function confirmChangeSide() {
   state[battingTeam].score += window.__pendingRuns;
 
   // Switch sides
-  state.half = state.half === 'top' ? 'bottom' : 'top';
+  // 공수교대: top -> bottom (같은 회), bottom -> top (다음 회, 최대 9회)
   if (state.half === 'top') {
-    state.inning++;
-    // Auto-toggle gender on new inning
-    state.gender = state.inning % 2 === 1 ? 'female' : 'male';
+    state.half = 'bottom';
+  } else {
+    if (state.inning < 9) {
+      state.inning++;
+      state.half = 'top';
+      // Auto-toggle gender on new inning
+      state.gender = state.inning % 2 === 1 ? 'female' : 'male';
+    } else {
+      // 9회 말이면 더 이상 진행 안 함
+      toast('경기 종료 (9회 말까지)');
+      closeModal();
+      render();
+      return;
+    }
   }
   state.strike = 0;
   state.out = 0;
@@ -1866,7 +1940,8 @@ function openModal(type) {
         • 볼 카운트는 사용하지 않습니다 (스트라이크와 아웃만)<br>
         • 잔루는 이닝이 바뀌어도 <b>유지됩니다</b><br>
         • 두 야구장: 홈팀과 어웨이팀이 각각 자기 잔루를 가집니다<br>
-        • 투수 2명(SP·CP), 유격수 2명(SS1·SS2), 중견수 최대 3명(CF1·CF2·CF3)<br><br>
+        • 타순 1~14번에 포지션 배정: SP·CP(투수) / C(포수) / 1B·2B·3B / SS1·SS2(유격수) / CF1·CF2(중견) / LF·RF(좌·우익) / DH(지명타자)<br>
+        • 한 사람이 포지션을 받으면 다른 타순 드롭다운에서 사라져요. (단, DH는 여러 명 가능)<br><br>
         <b>👩👨 남/여 분리 시스템</b><br>
         • 한 팀에 여자 라인업 + 남자 라인업이 따로 저장됩니다<br>
         • 각각 별도의 잔루도 보관됩니다 (1·3이닝 여자 → 2·4이닝 남자)<br>
@@ -2152,7 +2227,7 @@ function renderTab() {
       </label>
     </div>
     <div class="pos-help" style="margin:8px 0;">
-      <b>포지션</b>: SP·CP(투수) / C(포수) / 1B·2B·3B / SS1·SS2(유격수) / LF·CF1·CF2·CF3·RF(외야)
+      <b>포지션</b>: SP·CP(투수) / C(포수) / 1B·2B·3B / SS1·SS2(유격수) / CF1·CF2(중견) / LF·RF(좌·우익) / DH(지명타자, 중복 가능)
     </div>
 
     <!-- Gender sub-tabs -->
@@ -2173,9 +2248,15 @@ function renderTab() {
       </button>
     </div>
 
-    <div style="font-family: 'Black Han Sans'; color: var(--gold); margin: 8px 0 6px 0; font-size: 14px;">⚾ 타순 (1~12) — ${editGender === 'female' ? '여자' : '남자'}팀</div>
+    <div style="font-family: 'Black Han Sans'; color: var(--gold); margin: 8px 0 6px 0; font-size: 14px;">⚾ 타순 (1~${BATTER_COUNT}) — ${editGender === 'female' ? '여자' : '남자'}팀</div>
   `;
   const roster = t[editGender];
+  // 이미 사용된 포지션 모음 (DH 제외 - 중복 허용)
+  const usedPositions = new Set(
+    roster.batters
+      .filter(b => b.pos && !DUPLICATE_OK_POS.includes(b.pos))
+      .map(b => b.pos)
+  );
   for (let i = 0; i < BATTER_COUNT; i++) {
     const p = roster.batters[i] || { pos: '', name: '' };
     html += `
@@ -2183,24 +2264,21 @@ function renderTab() {
         <div class="ord">${i + 1}</div>
         <select onchange="updateBatter('${team}', '${editGender}', ${i}, 'pos', this.value)">
           <option value="">— 포지션 —</option>
-          ${POSITIONS.map(pos => `<option value="${pos}" ${p.pos === pos ? 'selected' : ''}>${pos}</option>`).join('')}
+          ${POSITIONS.map(pos => {
+            // 본인 자리에서는 자기 포지션 표시 + 중복 OK 포지션은 항상 표시
+            // 다른 자리에서 이미 쓰는 포지션은 숨김 (DH 제외)
+            const isMine = (p.pos === pos);
+            const isDup = DUPLICATE_OK_POS.includes(pos);
+            const isUsedElsewhere = usedPositions.has(pos) && !isMine;
+            if (isUsedElsewhere && !isDup) return '';
+            return `<option value="${pos}" ${isMine ? 'selected' : ''}>${pos}</option>`;
+          }).join('')}
         </select>
         <input type="text" placeholder="선수 이름" value="${p.name}" oninput="updateBatter('${team}', '${editGender}', ${i}, 'name', this.value)">
         <button class="del" onclick="clearBatter('${team}', '${editGender}', ${i})" title="삭제">✕</button>
       </div>
     `;
   }
-  html += `<div style="font-family: 'Black Han Sans'; color: var(--gold); margin: 14px 0 6px 0; font-size: 14px;">🥎 투수 (SP, CP)</div>`;
-  ['SP', 'CP'].forEach(slot => {
-    html += `
-      <div class="lineup-edit">
-        <div class="ord">${slot}</div>
-        <div style="text-align:center; color:var(--chalk-dim); font-size:12px;">투수</div>
-        <input type="text" placeholder="투수 이름" value="${roster.pitchers[slot] || ''}" oninput="updatePitcher('${team}', '${editGender}', '${slot}', this.value)">
-        <button class="del" onclick="updatePitcher('${team}', '${editGender}', '${slot}', ''); renderTab();" title="삭제">✕</button>
-      </div>
-    `;
-  });
   html += `<div style="margin-top:14px; text-align:center;">
     <button class="btn dark" style="display:inline-block; min-width:160px;" onclick="clearAllLineup('${team}', '${editGender}')">${editGender === 'female' ? '여자' : '남자'}팀 라인업 비우기</button>
   </div>`;
@@ -2211,9 +2289,15 @@ function updateBatter(team, gender, idx, field, value) {
   state[team][gender].batters[idx][field] = value;
   persist();
   setTimeout(render, 0);
+  // 포지션 변경 시 모달도 다시 그려서 사용된 포지션 반영
+  if (field === 'pos') {
+    renderTab();
+  }
 }
 
 function updatePitcher(team, gender, slot, value) {
+  // legacy 호환용 (이제 사용하지 않음)
+  if (!state[team][gender].pitchers) state[team][gender].pitchers = {};
   state[team][gender].pitchers[slot] = value;
   persist();
   setTimeout(render, 0);
@@ -2241,8 +2325,7 @@ function saveLineup(team) {
     name,
     teamName: state[team].name,
     gender: editGender,
-    batters: JSON.parse(JSON.stringify(roster.batters)),
-    pitchers: JSON.parse(JSON.stringify(roster.pitchers))
+    batters: JSON.parse(JSON.stringify(roster.batters))
   });
   localStorage.setItem('yuga_lineups', JSON.stringify(savedLineups));
   nameInput.value = '';
@@ -2253,8 +2336,24 @@ function saveLineup(team) {
 function loadLineupTo(team, idx) {
   const s = savedLineups[idx];
   // Load into the currently active gender
-  state[team][state.gender].batters = JSON.parse(JSON.stringify(s.batters));
-  state[team][state.gender].pitchers = JSON.parse(JSON.stringify(s.pitchers || { SP: '', CP: '' }));
+  let batters = JSON.parse(JSON.stringify(s.batters || []));
+  // 길이 보정
+  while (batters.length < BATTER_COUNT) batters.push({ pos: '', name: '' });
+  if (batters.length > BATTER_COUNT) batters = batters.slice(0, BATTER_COUNT);
+  // legacy: 저장된 pitchers가 있으면 batters에 합치기
+  if (s.pitchers) {
+    ['SP', 'CP'].forEach(slot => {
+      const pName = s.pitchers[slot];
+      if (pName) {
+        const exists = batters.some(b => b.name === pName);
+        if (!exists) {
+          const emptyIdx = batters.findIndex(b => !b.name);
+          if (emptyIdx >= 0) batters[emptyIdx] = { pos: slot, name: pName };
+        }
+      }
+    });
+  }
+  state[team][state.gender].batters = batters;
   state[team][state.gender].currentBatter = 0;
   state[team].name = s.teamName || s.name;
   toast(`'${s.name}' → ${team === 'home' ? '홈' : '어웨이'}팀 ${state.gender === 'female' ? '여자' : '남자'} 라인업`);
