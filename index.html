@@ -924,6 +924,27 @@
     /* Strike/Out row */
     .count-area { padding: 2px 2px; gap: 4px; margin-top: 2px; }
     .strike-row, .out-row { padding: 2px 4px; gap: 6px; }
+    /* Lineup rows: 14명 모두 보이게 압축 */
+    .row {
+      grid-template-columns: 18px 22px 1fr 0px;
+      gap: 3px;
+      padding: 0 4px;
+      min-height: 0;
+    }
+    .row .num { font-size: 9px; }
+    .pos-sticker { width: 18px; height: 18px; font-size: 7px; }
+    .row .name { font-size: 10px; padding-left: 2px; }
+    .bat-marker { width: 0; height: 0; font-size: 0; }
+    .row.current .bat-marker { width: 12px; font-size: 10px; }
+    .team-col .team-name { font-size: 12px; padding: 2px 4px; }
+  }
+
+  /* 매우 작은 모바일 가로 (높이 320px 이하): 더 압축 */
+  @media (max-width: 900px) and (orientation: landscape) and (max-height: 380px) {
+    .row { grid-template-columns: 14px 16px 1fr 0px; gap: 2px; padding: 0 2px; }
+    .row .num { font-size: 8px; }
+    .pos-sticker { width: 14px; height: 14px; font-size: 6px; }
+    .row .name { font-size: 9px; padding-left: 1px; }
   }
 
   /* Very narrow / portrait fallback */
